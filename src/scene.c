@@ -80,12 +80,14 @@ scene_manager_start (SceneManager *manager)
   gst_init (NULL, NULL);
 
   desc = g_strdup_printf (
-      "v4l2src ! video/x-raw,height=720 ! queue ! "
-      "videoconvert ! nvvideoconvert ! queue ! "
-      "capsfilter caps=video/x-raw(memory:NVMM),format=(string)RGBA name=src-element "
-      "nvstreammux batch-size=1 name=streammux ! queue !  nvinfer name=infer ! "
+      "v4l2src ! video/x-raw,height=720,framerate=10/1 ! queue ! videoconvert ! "
+      "nvvideoconvert ! capsfilter caps=video/x-raw(memory:NVMM),format=(string)RGBA name=src-element "
+      "nvstreammux batch-size=1 live-source=true name=streammux ! "
+      "queue !  nvinfer name=infer ! "
       "queue ! nvvideoconvert ! "
-      "queue ! nvdsosd ! queue ! nvegltransform ! nveglglessink");
+      "queue ! nvdsosd ! "
+      "nvegltransform ! "
+      "nveglglessink");
 
   SELF->pipeline = gst_parse_launch (desc, &error);
 
@@ -109,13 +111,13 @@ scene_manager_start (SceneManager *manager)
   pgie = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "infer");
 
   g_object_set (G_OBJECT (pgie),
-                "config-file-path", "/home/mexxik/jetson-watcher/config/config_infer_primary_peoplenet.txt", NULL);
+                "config-file-path", "/home/mexxik/jetson-watcher/config/config_infer_primary_frcnn.txt", NULL);
 
   g_object_set (G_OBJECT (streammux),
                 "width", 1280,
                 "height", 720,
       // "batched-push-timeout", 40000,
-                //"nvbuf-memory-type", 3,
+      //"nvbuf-memory-type", 3,
                 NULL);
 
   // -----------------------------------------------
@@ -128,7 +130,6 @@ scene_manager_start (SceneManager *manager)
 
   SELF->started = TRUE;
 }
-
 
 static gboolean
 bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager)
