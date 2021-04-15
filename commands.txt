@@ -1,0 +1,1 @@
+deepstream-app -c deepstream/deepstream_app_source1_peoplenet.txt

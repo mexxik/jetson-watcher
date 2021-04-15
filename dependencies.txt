@@ -1,0 +1,15 @@
+## DEV DEPENDENCIES
+
+sudo apt install curl
+curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+npm install -g @vue/cli
+vue create -b -n client
+cd client
+npm run serve
+
+
+## RUN DEPENDENCIES
+
+sudo apt install libglib2.0-dev
