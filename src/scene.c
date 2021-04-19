@@ -25,6 +25,8 @@ static guint scene_signals[N_SIGNALS] = {0,};
 
 static gboolean bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager);
 static void add_usb_camera (SceneManager *manager);
+static void add_file (SceneManager *manager);
+static void decodebin_pad_added (GstElement *decodebin, GstPad *pad, gpointer user_data);
 
 static void
 scene_manager_constructed (GObject *object)
@@ -84,7 +86,7 @@ scene_manager_start (SceneManager *manager)
   desc = g_strdup_printf (
       "nvstreammux batch-size=%d live-source=true name=stream-mux ! queue ! "
       "nvinfer name=infer ! queue ! "
-      "nvmultistreamtiler ! queue ! "
+      "nvmultistreamtiler width=1280 height=720 ! queue ! "
       "nvvideoconvert ! queue ! "
       "nvdsosd ! queue ! "
       "nvegltransform ! nveglglessink"
@@ -109,74 +111,17 @@ scene_manager_start (SceneManager *manager)
 
   // -----------------------------------------------
 
+
+
+  // -----------------------------------------------
+
+  SELF->bus = gst_element_get_bus (SELF->pipeline);
+  SELF->bus_watch_id = gst_bus_add_watch (SELF->bus, (GstBusFunc) bus_loop, manager);
+
+  gst_element_set_state (GST_ELEMENT(SELF->pipeline), GST_STATE_PLAYING);
+
   add_usb_camera (manager);
-
-  // -----------------------------------------------
-
-  SELF->bus = gst_element_get_bus (SELF->pipeline);
-  SELF->bus_watch_id = gst_bus_add_watch (SELF->bus, (GstBusFunc) bus_loop, manager);
-
-  gst_element_set_state (GST_ELEMENT(SELF->pipeline), GST_STATE_PLAYING);
-
-  SELF->started = TRUE;
-}
-
-void
-scene_manager_start_ (SceneManager *manager)
-{
-  gchar *desc = NULL;
-  GError *error = NULL;
-  GstElement *pgie = NULL, *streammux = NULL, *src_element;
-
-  gst_init (NULL, NULL);
-
-  desc = g_strdup_printf (
-      "v4l2src ! video/x-raw,height=720,framerate=10/1 ! "
-      "nvvideoconvert ! capsfilter caps=video/x-raw(memory:NVMM),format=(string)RGBA name=src-element "
-      "nvstreammux batch-size=1 live-source=true name=streammux ! "
-      "nvinfer name=infer ! "
-      "nvdsosd display-text=1 ! "
-      "nvegltransform ! "
-      "nveglglessink");
-
-  SELF->pipeline = gst_parse_launch (desc, &error);
-
-  // -----------------------------------------------
-
-  src_element = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "src-element");
-  streammux = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "streammux");
-
-  GstPad *sinkpad, *srcpad;
-
-  sinkpad = gst_element_get_request_pad (streammux, "sink_0");
-  srcpad = gst_element_get_static_pad (src_element, "src");
-
-  gst_pad_link (srcpad, sinkpad);
-
-  gst_object_unref (sinkpad);
-  gst_object_unref (srcpad);
-
-  // -----------------------------------------------
-
-  pgie = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "infer");
-
-  g_object_set (G_OBJECT (pgie),
-                "config-file-path", "/home/mexxik/jetson-watcher/config/config_infer_primary_frcnn.txt", NULL);
-
-  g_object_set (G_OBJECT (streammux),
-                "width", 1280,
-                "height", 720,
-      // "batched-push-timeout", 40000,
-      //"nvbuf-memory-type", 3,
-                NULL);
-
-  // -----------------------------------------------
-
-
-  SELF->bus = gst_element_get_bus (SELF->pipeline);
-  SELF->bus_watch_id = gst_bus_add_watch (SELF->bus, (GstBusFunc) bus_loop, manager);
-
-  gst_element_set_state (GST_ELEMENT(SELF->pipeline), GST_STATE_PLAYING);
+  add_file (manager);
 
   SELF->started = TRUE;
 }
@@ -239,7 +184,7 @@ add_usb_camera (SceneManager *manager)
   gchar *desc = NULL;
   GError *error = NULL;
   GstElement *bin = NULL, *src_element = NULL;
-  GstPad *sink_pad, *src_pad;
+  GstPad *sink_pad = NULL, *src_pad = NULL;
 
   desc = "v4l2src ! video/x-raw,height=720,framerate=10/1 ! "
          "nvvideoconvert ! capsfilter caps=video/x-raw(memory:NVMM),format=(string)RGBA name=src-element";
@@ -258,6 +203,65 @@ add_usb_camera (SceneManager *manager)
 
   gst_object_unref (sink_pad);
   // gst_object_unref (src_pad);
+}
+
+static void
+add_file (SceneManager *manager)
+{
+  gchar *desc = NULL;
+  GError *error = NULL;
+  GstElement *bin = NULL, *decode_bin = NULL;
+
+  desc = "filesrc location=/opt/nvidia/deepstream/deepstream-5.1/samples/streams/sample_720p.mp4 ! "
+         "decodebin name=decode-bin";
+  bin = gst_parse_bin_from_description (desc, FALSE, NULL);
+  gst_bin_add (GST_BIN (SELF->pipeline), bin);
+  gst_element_sync_state_with_parent (bin);
 
 
+  decode_bin = gst_bin_get_by_name (GST_BIN (bin), "decode-bin");
+  g_signal_connect (decode_bin, "pad-added", G_CALLBACK (decodebin_pad_added), manager);
+
+}
+
+static void
+decodebin_pad_added (GstElement *decodebin, GstPad *pad, gpointer user_data)
+{
+  SceneManager *manager = (SceneManager *) user_data;
+
+  GstCaps *caps;
+  const gchar *name;
+  GstElement *bin = NULL;
+
+  bin = gst_element_get_parent (decodebin);
+
+  caps = gst_pad_get_current_caps (pad);
+  name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
+  if (g_str_has_prefix (name, "video"))
+    {
+      GstElement *video_convert = NULL;
+      GstPad *sink_pad = NULL, *src_pad = NULL, *src_conv_pad = NULL, *sink_conv_pad = NULL;
+
+      video_convert = gst_element_factory_make ("nvvideoconvert", NULL);
+      gst_bin_add (GST_BIN (bin), video_convert);
+      gst_element_sync_state_with_parent (video_convert);
+
+      sink_conv_pad = gst_element_get_static_pad (video_convert, "sink");
+      src_conv_pad = gst_element_get_static_pad (video_convert, "src");
+
+      gst_pad_link (pad, sink_conv_pad);
+
+      sink_pad = gst_element_get_request_pad (SELF->stream_mux, "sink_1");
+      src_pad = gst_ghost_pad_new ("video_src", src_conv_pad);
+      gst_pad_set_active (src_pad, TRUE);
+      gst_element_add_pad (bin, src_pad);
+
+      gst_pad_link (src_pad, sink_pad);
+
+      // gst_element_sync_state_with_parent (video_convert);
+
+      gst_object_unref (sink_pad);
+      gst_object_unref (src_conv_pad);
+      gst_object_unref (sink_conv_pad);
+    }
 }
