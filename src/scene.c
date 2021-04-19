@@ -9,6 +9,8 @@ struct _SceneManagerPrivate {
     guint bus_watch_id;
 
     GstElement *pipeline;
+    GstElement *stream_mux;
+    GstElement *pgie;
 };
 
 G_DEFINE_TYPE_WITH_CODE (SceneManager, scene_manager, G_TYPE_OBJECT, G_ADD_PRIVATE (SceneManager))
@@ -22,6 +24,7 @@ enum {
 static guint scene_signals[N_SIGNALS] = {0,};
 
 static gboolean bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager);
+static void add_usb_camera (SceneManager *manager);
 
 static void
 scene_manager_constructed (GObject *object)
@@ -75,17 +78,64 @@ scene_manager_start (SceneManager *manager)
 {
   gchar *desc = NULL;
   GError *error = NULL;
+
+  gst_init (NULL, NULL);
+
+  desc = g_strdup_printf (
+      "nvstreammux batch-size=%d live-source=true name=stream-mux ! queue ! "
+      "nvinfer name=infer ! queue ! "
+      "nvmultistreamtiler ! queue ! "
+      "nvvideoconvert ! queue ! "
+      "nvdsosd ! queue ! "
+      "nvegltransform ! nveglglessink"
+
+      "",
+      1 // stremmux batch size
+      );
+  SELF->pipeline = gst_parse_launch (desc, &error);
+
+  SELF->stream_mux = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "stream-mux");
+  SELF->pgie = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "infer");
+
+  // -----------------------------------------------
+
+  g_object_set (G_OBJECT (SELF->pgie),
+                "config-file-path", "/home/mexxik/jetson-watcher/config/config_infer_primary_frcnn.txt", NULL);
+
+  g_object_set (G_OBJECT (SELF->stream_mux),
+                "width", 1280,
+                "height", 720,
+                NULL);
+
+  // -----------------------------------------------
+
+  add_usb_camera (manager);
+
+  // -----------------------------------------------
+
+  SELF->bus = gst_element_get_bus (SELF->pipeline);
+  SELF->bus_watch_id = gst_bus_add_watch (SELF->bus, (GstBusFunc) bus_loop, manager);
+
+  gst_element_set_state (GST_ELEMENT(SELF->pipeline), GST_STATE_PLAYING);
+
+  SELF->started = TRUE;
+}
+
+void
+scene_manager_start_ (SceneManager *manager)
+{
+  gchar *desc = NULL;
+  GError *error = NULL;
   GstElement *pgie = NULL, *streammux = NULL, *src_element;
 
   gst_init (NULL, NULL);
 
   desc = g_strdup_printf (
-      "v4l2src ! video/x-raw,height=720,framerate=10/1 ! queue ! videoconvert ! "
+      "v4l2src ! video/x-raw,height=720,framerate=10/1 ! "
       "nvvideoconvert ! capsfilter caps=video/x-raw(memory:NVMM),format=(string)RGBA name=src-element "
       "nvstreammux batch-size=1 live-source=true name=streammux ! "
-      "queue !  nvinfer name=infer ! "
-      "queue ! nvvideoconvert ! "
-      "queue ! nvdsosd ! "
+      "nvinfer name=infer ! "
+      "nvdsosd display-text=1 ! "
       "nvegltransform ! "
       "nveglglessink");
 
@@ -142,7 +192,7 @@ bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager)
           gchar *debug;
 
           gst_message_parse_error (msg, &err, &debug);
-          g_print ("Error: %s - %s\n", err->message, debug);
+          g_print ("error: %s - %s\n", err->message, debug);
           g_error_free (err);
           g_free (debug);
 
@@ -181,4 +231,33 @@ bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager)
     }
 
   return TRUE;
+}
+
+static void
+add_usb_camera (SceneManager *manager)
+{
+  gchar *desc = NULL;
+  GError *error = NULL;
+  GstElement *bin = NULL, *src_element = NULL;
+  GstPad *sink_pad, *src_pad;
+
+  desc = "v4l2src ! video/x-raw,height=720,framerate=10/1 ! "
+         "nvvideoconvert ! capsfilter caps=video/x-raw(memory:NVMM),format=(string)RGBA name=src-element";
+  bin = gst_parse_bin_from_description (desc, FALSE, NULL);
+  gst_bin_add (GST_BIN (SELF->pipeline), bin);
+  gst_element_sync_state_with_parent (bin);
+
+  src_element = gst_bin_get_by_name (GST_BIN (bin), "src-element");
+
+  sink_pad = gst_element_get_request_pad (SELF->stream_mux, "sink_0");
+  src_pad = gst_ghost_pad_new ("video_src", gst_element_get_static_pad (src_element, "src"));
+  // gst_pad_set_active (src_pad, TRUE);
+  gst_element_add_pad (bin, src_pad);
+
+  gst_pad_link (src_pad, sink_pad);
+
+  gst_object_unref (sink_pad);
+  // gst_object_unref (src_pad);
+
+
 }
