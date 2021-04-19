@@ -85,14 +85,14 @@ scene_manager_start (SceneManager *manager)
 
   desc = g_strdup_printf (
       "nvstreammux batch-size=%d live-source=true name=stream-mux ! queue ! "
-      "nvinfer name=infer ! queue ! "
-      "nvmultistreamtiler width=1280 height=720 ! queue ! "
+      "nvinfer name=infer batch-size=%d ! queue ! "
+      "nvmultistreamtiler width=1280 height=720 rows=2 columns=2 ! queue ! "
       "nvvideoconvert ! queue ! "
       "nvdsosd ! queue ! "
       "nvegltransform ! nveglglessink"
-
       "",
-      1 // stremmux batch size
+      2, // stremmux batch size
+      2  // infer batch size
       );
   SELF->pipeline = gst_parse_launch (desc, &error);
 
