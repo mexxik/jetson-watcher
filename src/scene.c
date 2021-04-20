@@ -24,7 +24,7 @@ enum {
 static guint scene_signals[N_SIGNALS] = {0,};
 
 static gboolean bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager);
-static void add_usb_camera (SceneManager *manager);
+static void add_usb_camera (SceneManager *manager, guint stream_id);
 static void add_file (SceneManager *manager);
 static void decodebin_pad_added (GstElement *decodebin, GstPad *pad, gpointer user_data);
 
@@ -96,6 +96,8 @@ scene_manager_start (SceneManager *manager)
       );
   SELF->pipeline = gst_parse_launch (desc, &error);
 
+  allowenter
+
   SELF->stream_mux = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "stream-mux");
   SELF->pgie = gst_bin_get_by_name (GST_BIN (SELF->pipeline), "infer");
 
@@ -120,8 +122,10 @@ scene_manager_start (SceneManager *manager)
 
   gst_element_set_state (GST_ELEMENT(SELF->pipeline), GST_STATE_PLAYING);
 
-  add_usb_camera (manager);
+  add_usb_camera (manager, 0);
+  // add_usb_camera (manager, 1);
   add_file (manager);
+  //add_file (manager, 1);
 
   SELF->started = TRUE;
 }
@@ -179,9 +183,9 @@ bus_loop (GstBus *bus, GstMessage *msg, SceneManager *manager)
 }
 
 static void
-add_usb_camera (SceneManager *manager)
+add_usb_camera (SceneManager *manager, guint stream_id)
 {
-  gchar *desc = NULL;
+  gchar *desc = NULL, *sink_id = NULL;
   GError *error = NULL;
   GstElement *bin = NULL, *src_element = NULL;
   GstPad *sink_pad = NULL, *src_pad = NULL;
@@ -194,13 +198,15 @@ add_usb_camera (SceneManager *manager)
 
   src_element = gst_bin_get_by_name (GST_BIN (bin), "src-element");
 
-  sink_pad = gst_element_get_request_pad (SELF->stream_mux, "sink_0");
+  sink_id = g_strdup_printf ("sink_%d", stream_id);
+  sink_pad = gst_element_get_request_pad (SELF->stream_mux, sink_id);
   src_pad = gst_ghost_pad_new ("video_src", gst_element_get_static_pad (src_element, "src"));
   // gst_pad_set_active (src_pad, TRUE);
   gst_element_add_pad (bin, src_pad);
 
   gst_pad_link (src_pad, sink_pad);
 
+  g_free (sink_id);
   gst_object_unref (sink_pad);
   // gst_object_unref (src_pad);
 }
@@ -233,7 +239,7 @@ decodebin_pad_added (GstElement *decodebin, GstPad *pad, gpointer user_data)
   const gchar *name;
   GstElement *bin = NULL;
 
-  bin = gst_element_get_parent (decodebin);
+  bin = GST_ELEMENT (gst_element_get_parent (decodebin));
 
   caps = gst_pad_get_current_caps (pad);
   name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
